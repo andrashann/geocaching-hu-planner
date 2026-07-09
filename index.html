@@ -369,9 +369,10 @@
           if (feature.properties && feature.properties.waypoint) {
             var typeCode = CACHE_TYPE_CODES[feature.properties.type] || feature.properties.tipus;
             layer.bindPopup(
-              '<a href="http://geocaching.hu/caches.geo?id=' + feature.properties.id + '" target="_blank">' +
-              feature.properties.waypoint + '</a> (' + typeCode + ') – ' +
-              feature.properties.nickname
+              typeCode + '-<a href="http://geocaching.hu/caches.geo?id=' + feature.properties.id + '" target="_blank">' +
+              feature.properties.waypoint + '</a><br>' +
+              '<b>' + feature.properties.nickname + '</b><br>' +
+              feature.properties.allapot
             );
           }
         }
@@ -410,9 +411,12 @@
         }).addTo(layerGroup);
         var info = cacheInfo[point.id];
         if (info) {
+          var cacheTypeCode = CACHE_TYPE_CODES[info.type] || info.tipus;
           marker.bindPopup(
-            '<a href="http://geocaching.hu/caches.geo?id=' + point.id + '" target="_blank">' +
-            info.waypoint + '-' + point.no + '</a> (' + point.type + ') – ' + info.nickname
+            cacheTypeCode + '-<a href="http://geocaching.hu/caches.geo?id=' + point.id + '" target="_blank">' +
+            info.waypoint + '-' + point.no + '</a> (' + point.type + ')<br>' +
+            '<b>' + info.nickname + '</b><br>' +
+            info.allapot
           );
         }
       });
@@ -520,7 +524,7 @@
             var category = f1 && f2 ? 'both' : f1 ? 'user1' : f2 ? 'user2' : 'nobody';
             groups[category].push(feature);
             cacheCategories[cache.id] = category;
-            cacheInfo[cache.id] = { waypoint: cache.waypoint, nickname: cache.nickname };
+            cacheInfo[cache.id] = { waypoint: cache.waypoint, nickname: cache.nickname, type: cache.type, tipus: cache.tipus, allapot: cache.allapot };
             if (MULTI_STAGE_CACHE_TYPES[cache.type]) {
               multiCacheIds[cache.id] = true;
             }
