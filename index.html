@@ -3,6 +3,7 @@
 <head>
   <title>Közösgeocaching-tervező</title>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" />
   <style>
@@ -91,6 +92,43 @@
       margin-right: 6px;
       vertical-align: middle;
     }
+    #legendToggle {
+      display: none;
+    }
+    /* On narrow/mobile screens the layer selector is collapsed behind a toggle button
+       instead of always sitting open over the map. */
+    @media (max-width: 700px) {
+      #panel {
+        padding: 8px 10px;
+        gap: 8px;
+      }
+      #panel h1 {
+        font-size: 16px;
+        margin: 0;
+      }
+      #panel label[for] {
+        display: none;
+      }
+      #panel input[type=text] {
+        flex: 1 1 100px;
+        min-width: 60px;
+      }
+      #legendToggle {
+        display: inline-block;
+      }
+      #legend {
+        display: none;
+        max-width: 82vw;
+        max-height: 70vh;
+        overflow-y: auto;
+      }
+      #legend.legend-open {
+        display: block;
+      }
+      #legend label {
+        white-space: normal;
+      }
+    }
   </style>
 </head>
 <body>
@@ -101,6 +139,7 @@
     <label for="user2">Felhasználó 2:</label>
     <input type="text" id="user2" placeholder="username2">
     <button id="okButton">OK</button>
+    <button id="legendToggle" type="button">Rétegek</button>
     <div id="status"></div>
   </div>
   <div id="map"></div>
@@ -164,6 +203,12 @@
       return div;
     };
     legend.addTo(map);
+
+    // On mobile the legend starts collapsed (see the max-width:700px media query) and is
+    // toggled open/closed via this button instead of always sitting open over the map.
+    document.getElementById('legendToggle').addEventListener('click', function() {
+      document.getElementById('legend').classList.toggle('legend-open');
+    });
 
     // Tracks which of the 4 main category layers are currently checked/visible, so the
     // multi-point dots/lines can be filtered to match - a multi-cache's extra points should
