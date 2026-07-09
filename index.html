@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Közösgeocaching-tervező</title>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" />
+  <style>
+    html, body {
+      height: 100%;
+      margin: 0;
+    }
+    body {
+      display: flex;
+      flex-direction: column;
+      font-family: sans-serif;
+    }
+    #panel {
+      flex: 0 0 auto;
+      padding: 12px 16px;
+      background: #f5f5f5;
+      border-bottom: 1px solid #ccc;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    #panel h1 {
+      font-size: 18px;
+      margin: 0 16px 0 0;
+      flex-basis: 100%;
+    }
+    #panel label {
+      font-size: 14px;
+    }
+    #panel input[type=text] {
+      padding: 4px 6px;
+      font-size: 14px;
+    }
+    #panel button {
+      padding: 5px 14px;
+      font-size: 14px;
+      cursor: pointer;
+    }
+    #status {
+      font-size: 13px;
+      color: #a00;
+      flex-basis: 100%;
+    }
+    #status.loading {
+      color: #555;
+    }
+    #map {
+      flex: 1 1 auto;
+      min-height: 0;
+    }
+    /* The combined OpenFreeMap/OSM/overlay attributions can get long enough to overflow
+       the map width - let it wrap onto multiple lines instead of being cut off. */
+    .leaflet-control-attribution {
+      max-width: calc(100vw - 20px);
+      white-space: normal;
+    }
+    #legend {
+      background: #fff;
+      padding: 10px 12px;
+      border-radius: 4px;
+      box-shadow: 0 1px 5px rgba(0, 0, 0, 0.4);
+      font-size: 13px;
+    }
+    #legend label {
+      display: block;
+      margin: 4px 0;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .legend-group + .legend-group {
+      margin-top: 10px;
+    }
+    .legend-title {
+      font-weight: bold;
+      padding: 0 0 6px 0;
+      margin-bottom: 6px;
+      border-bottom: 1px solid #ccc;
+    }
+    .legend-swatch {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      border: 1px solid #000;
+      margin-right: 6px;
+      vertical-align: middle;
+    }
+  </style>
+</head>
+<body>
+  <div id="panel">
+    <h1>Közösgeocaching-tervező</h1>
+    <label for="user1">Felhasználó 1:</label>
+    <input type="text" id="user1" placeholder="username1">
+    <label for="user2">Felhasználó 2:</label>
+    <input type="text" id="user2" placeholder="username2">
+    <button id="okButton">OK</button>
+    <div id="status"></div>
+  </div>
+  <div id="map"></div>
+
+  <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
+  <script src="https://unpkg.com/@maplibre/maplibre-gl-leaflet@0.1.3/leaflet-maplibre-gl.js"></script>
+  <script>
+    var API_BASE = 'https://api.geocaching.hu';
+    // Short cache-type codes, per the geocaching.hu API's hstat schema.
+    var CACHE_TYPE_CODES = { '1': 'H', '2': 'M', '3': 'V', '4': 'E', '6': 'X' };
+    var MULTI_CACHE_TYPE = '2';
+    var CATEGORY_COLORS = { user1: 'red', user2: 'blue', both: 'gray', nobody: 'green' };
+
+    var map = L.map('map').setView([47.5, 19], 8);
+
+    // Vector basemap via the maplibre-gl-leaflet bridge - Leaflet drives an embedded MapLibre
+    // GL instance, CSS-transforming its canvas during zoom animations for a smooth (non-stepped)
+    // zoom feel, while everything else here stays plain Leaflet.
+    L.maplibreGL({
+      style: 'https://tiles.openfreemap.org/styles/liberty',
+      attributionControl: {
+        customAttribution: '&copy; <a href="https://openfreemap.org" target="_blank">OpenFreeMap</a> &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors'
+      }
+    }).addTo(map);
+
+    // Dedicated pane, below the default overlayPane (400) that circleMarkers live in,
+    // so the multi-point connector line always renders under the point markers -
+    // regardless of layer toggle order - and never eats their clicks.
+    map.createPane('multiLinePane');
+    map.getPane('multiLinePane').style.zIndex = 350;
+
+    var legend = L.control({ position: 'topright' });
+    legend.onAdd = function() {
+      var div = L.DomUtil.create('div', 'leaflet-control');
+      div.id = 'legend';
+      div.innerHTML =
+        '<div class="legend-group">' +
+        '<div class="legend-title">Ki találta meg?</div>' +
+        '<label><input type="checkbox" id="cb-user1" checked><span class="legend-swatch" style="background:red"></span><span id="legend-name-user1"></span></label>' +
+        '<label><input type="checkbox" id="cb-user2" checked><span class="legend-swatch" style="background:blue"></span><span id="legend-name-user2"></span></label>' +
+        '<label><input type="checkbox" id="cb-both"><span class="legend-swatch" style="background:gray"></span><span id="legend-name-both"></span></label>' +
+        '<label><input type="checkbox" id="cb-nobody" checked><span class="legend-swatch" style="background:green"></span>Senki</label>' +
+        '</div>' +
+        '<div class="legend-group">' +
+        '<div class="legend-title">Multiláda extrák</div>' +
+        '<label><input type="checkbox" id="cb-multi-points" checked>Multipontok mutatása</label>' +
+        '<label><input type="checkbox" id="cb-multi-lines">Multipontok összekötése</label>' +
+        '</div>' +
+        '<div class="legend-group">' +
+        '<div class="legend-title">Overlay rétegek</div>' +
+        '<label><input type="checkbox" id="cb-hiking">WaymarkedTrails Hiking</label>' +
+        '<label><input type="checkbox" id="cb-cycling">WaymarkedTrails Cycling</label>' +
+        '<label><input type="checkbox" id="cb-mtb">WaymarkedTrails MTB</label>' +
+        '<label><input type="checkbox" id="cb-protected-areas">Védett területek</label>' +
+        '<label><input type="checkbox" id="cb-forest-protection">Erdők védettsége</label>' +
+        '</div>';
+      // Stop map drag/zoom/click from firing when interacting with the panel.
+      L.DomEvent.disableClickPropagation(div);
+      L.DomEvent.disableScrollPropagation(div);
+      return div;
+    };
+    legend.addTo(map);
+
+    // Tracks which of the 4 main category layers are currently checked/visible, so the
+    // multi-point dots/lines can be filtered to match - a multi-cache's extra points should
+    // never show up while its main point (e.g. "Both") is hidden.
+    var visibleCategories = { user1: false, user2: false, both: false, nobody: false };
+    var lastMultiPoints = [];
+    var lastCacheCategories = {};
+    var lastCacheInfo = {};
+    var currentMultiPointsGroup = null;
+    var currentMultiLineGroup = null;
+
+    // Holds the current (rebuilt-per-query) Leaflet layer for each category, so the fixed
+    // checkboxes below can look up "whatever layer is live right now" rather than a stale one.
+    var categoryLayers = { user1: null, user2: null, both: null, nobody: null };
+
+    function bindToggle(checkboxId, getLayer) {
+      document.getElementById(checkboxId).addEventListener('change', function(e) {
+        var layer = getLayer();
+        if (!layer) {
+          return;
+        }
+        if (e.target.checked) {
+          layer.addTo(map);
+        } else {
+          map.removeLayer(layer);
+        }
+      });
+    }
+
+    bindToggle('cb-user1', function() { return categoryLayers.user1; });
+    bindToggle('cb-user2', function() { return categoryLayers.user2; });
+    bindToggle('cb-both', function() { return categoryLayers.both; });
+    bindToggle('cb-nobody', function() { return categoryLayers.nobody; });
+    bindToggle('cb-multi-points', function() { return currentMultiPointsGroup; });
+    bindToggle('cb-multi-lines', function() { return currentMultiLineGroup; });
+
+    // The "vedettseg" style has a server-side scale threshold that renders nothing below
+    // about zoom 13. Requesting an oversized image for the same tile bbox raises the
+    // effective resolution enough to cross that threshold server-side; the browser then
+    // just scales the (larger) response back down to the normal tile size. Verified
+    // empirically: 512px isn't enough at zoom 11/12, 1024px reliably is.
+    var ForestProtectionWMS = L.TileLayer.WMS.extend({
+      getTileUrl: function(coords) {
+        var url = L.TileLayer.WMS.prototype.getTileUrl.call(this, coords);
+        if (coords.z < 13) {
+          url = url.replace(/([?&])(width|height)=\d+/gi, '$1$2=1024');
+        }
+        return url;
+      }
+    });
+
+    // Reference overlays - plain Leaflet <img>-tag tile layers, so (unlike a WebGL raster
+    // source) they don't need CORS support from the tile server.
+    var TRAIL_ATTRIBUTION = '&copy; <a href="https://waymarkedtrails.org" target="_blank">Waymarked Trails</a>';
+    var overlayLayers = {
+      hiking: L.tileLayer('https://tile.waymarkedtrails.org/hiking/{z}/{x}/{y}.png', { minZoom: 5, maxZoom: 18, attribution: TRAIL_ATTRIBUTION }),
+      cycling: L.tileLayer('https://tile.waymarkedtrails.org/cycling/{z}/{x}/{y}.png', { minZoom: 5, maxZoom: 18, attribution: TRAIL_ATTRIBUTION }),
+      mtb: L.tileLayer('https://tile.waymarkedtrails.org/mtb/{z}/{x}/{y}.png', { minZoom: 5, maxZoom: 18, attribution: TRAIL_ATTRIBUTION }),
+      protectedAreas: L.tileLayer.wms('https://webgis.okir.hu/geoserver/tirweb/wms?', {
+        layers: 'nptkttte',
+        transparent: true,
+        format: 'image/png',
+        opacity: 0.7,
+        attribution: 'Védettség &copy; <a href="https://web.okir.hu/hu/tart/index/234/Interaktiv_termeszetvedelmi_terkep" target="_blank">OKIR</a>'
+      }),
+      forestProtection: new ForestProtectionWMS('https://erdoterkep.nebih.gov.hu/geoserver/nebih/wms?', {
+        layers: 'KUL_RESZLET_VW',
+        styles: 'vedettseg',
+        transparent: true,
+        format: 'image/png',
+        opacity: 0.7,
+        minZoom: 11,
+        attribution: 'Erdők védettsége &copy; <a href="https://erdoterkep.nebih.gov.hu/" target="_blank">NÉBIH</a>'
+      })
+    };
+    bindToggle('cb-hiking', function() { return overlayLayers.hiking; });
+    bindToggle('cb-cycling', function() { return overlayLayers.cycling; });
+    bindToggle('cb-mtb', function() { return overlayLayers.mtb; });
+    bindToggle('cb-protected-areas', function() { return overlayLayers.protectedAreas; });
+    bindToggle('cb-forest-protection', function() { return overlayLayers.forestProtection; });
+
+    var statusEl = document.getElementById('status');
+    var okButton = document.getElementById('okButton');
+
+    function setStatus(message, isLoading) {
+      statusEl.textContent = message || '';
+      statusEl.classList.toggle('loading', !!isLoading);
+    }
+
+    function apiGet(path, params) {
+      var url = API_BASE + path + '?' + Object.keys(params).map(function(key) {
+        return encodeURIComponent(key) + '=' + encodeURIComponent(params[key]);
+      }).join('&');
+      return fetch(url).then(function(response) {
+        if (!response.ok) {
+          throw new Error('API hiba (' + response.status + '): ' + path);
+        }
+        return response.json();
+      });
+    }
+
+    // Looks up a numeric user ID from a geocaching.hu username.
+    function lookupUserId(member) {
+      return apiGet('/user', { member: member, fields: 'id,member' }).then(function(data) {
+        if (!data || !data.id) {
+          throw new Error('Nem található felhasználó: ' + member);
+        }
+        return data.id;
+      });
+    }
+
+    function fetchFoundWaypoints(userid) {
+      return apiGet('/cachesbyuser', { userid: userid, found: true, fields: 'waypoint' }).then(function(list) {
+        return new Set(list.map(function(x) { return x.waypoint; }));
+      });
+    }
+
+    function fetchAllCaches() {
+      return apiGet('/cachesbychange', {
+        fields: 'id,nickname,type,tipus,status,allapot,lat,lon,waypoint',
+      }).then(function(list) {
+        // Drop megszűnt (status 3) caches, mirroring the notebook's caches_df filtering.
+        return list.filter(function(c) { return c.status !== '3'; });
+      });
+    }
+
+    // Official geocaching.hu coordinate range: E09°31'-E29°44', N41°50'-N51°04'.
+    // Nudged very slightly inward - the API rejects requests exactly on the boundary.
+    var CACHE_AREA = { lat1: 41.8343, lat2: 51.0657, lon1: 9.5177, lon2: 29.7323 };
+
+    // Fetches every cache's points (main + multi stages + helper points) in one request,
+    // instead of looking them up per cache id (which hits a URL-length limit for id_list).
+    function fetchAllPoints() {
+      return apiGet('/pointsbyarea', {
+        lat1: CACHE_AREA.lat1,
+        lat2: CACHE_AREA.lat2,
+        lon1: CACHE_AREA.lon1,
+        lon2: CACHE_AREA.lon2,
+        wp: true,
+        fields: 'id,no,type,lat,lon',
+      });
+    }
+
+    function buildLayer(name, features, color, categoryKey) {
+      var layer = L.geoJSON({ type: 'FeatureCollection', features: features }, {
+        pointToLayer: function (feature, latlng) {
+          return L.circleMarker(latlng, {
+            radius: 5,
+            fillColor: color,
+            color: '#000',
+            weight: 1,
+            opacity: 1,
+            fillOpacity: 0.6
+          });
+        },
+        onEachFeature: function(feature, layer) {
+          if (feature.properties && feature.properties.waypoint) {
+            var typeCode = CACHE_TYPE_CODES[feature.properties.type] || feature.properties.tipus;
+            layer.bindPopup(
+              '<a href="http://geocaching.hu/caches.geo?id=' + feature.properties.id + '" target="_blank">' +
+              feature.properties.waypoint + '</a> (' + typeCode + ') – ' +
+              feature.properties.nickname
+            );
+          }
+        }
+      });
+      // Keep the multi-point dots/lines in sync with this category's own visibility.
+      layer.on('add', function() {
+        visibleCategories[categoryKey] = true;
+        refreshMultiExtras();
+      });
+      layer.on('remove', function() {
+        visibleCategories[categoryKey] = false;
+        refreshMultiExtras();
+      });
+      if (document.getElementById('cb-' + categoryKey).checked) {
+        layer.addTo(map);
+      }
+      return layer;
+    }
+
+    // (Re)populates a multi-point dots layer group in place, so it can be refreshed without
+    // touching its own on/off state.
+    function populateMultiPoints(layerGroup, points, cacheCategories, cacheInfo) {
+      layerGroup.clearLayers();
+      points.forEach(function(point) {
+        var color = CATEGORY_COLORS[cacheCategories[point.id]];
+        if (!color) {
+          return;
+        }
+        var marker = L.circleMarker([parseFloat(point.lat), parseFloat(point.lon)], {
+          radius: 4,
+          fillColor: color,
+          color: '#000',
+          weight: 1,
+          opacity: 1,
+          fillOpacity: 0.6
+        }).addTo(layerGroup);
+        var info = cacheInfo[point.id];
+        if (info) {
+          marker.bindPopup(
+            '<a href="http://geocaching.hu/caches.geo?id=' + point.id + '" target="_blank">' +
+            info.waypoint + '-' + point.no + '</a> (' + point.type + ') – ' + info.nickname
+          );
+        }
+      });
+    }
+
+    // (Re)populates the multi-point connector-line layer group in place.
+    function populateMultiLines(layerGroup, points) {
+      layerGroup.clearLayers();
+      var byCache = {};
+      points.forEach(function(point) {
+        (byCache[point.id] = byCache[point.id] || []).push(point);
+      });
+
+      Object.keys(byCache).forEach(function(cacheId) {
+        var pts = byCache[cacheId].slice().sort(function(a, b) {
+          var noA = parseInt(a.no, 10);
+          var noB = parseInt(b.no, 10);
+          if (noA !== noB) {
+            return noA - noB;
+          }
+          return a.type < b.type ? -1 : a.type > b.type ? 1 : 0;
+        });
+        if (pts.length < 2) {
+          return;
+        }
+        var latlngs = pts.map(function(p) { return [parseFloat(p.lat), parseFloat(p.lon)]; });
+        L.polyline(latlngs, {
+          pane: 'multiLinePane',
+          color: 'blue',
+          weight: 3,
+          opacity: 0.5,
+          dashArray: '1, 9',
+          lineCap: 'round'
+        }).addTo(layerGroup);
+      });
+    }
+
+    // Recomputes which multi-points/lines should show, based on which main category
+    // layers are currently checked, and repopulates the two groups accordingly.
+    function refreshMultiExtras() {
+      if (!currentMultiPointsGroup || !currentMultiLineGroup) {
+        return;
+      }
+      var visiblePoints = lastMultiPoints.filter(function(point) {
+        return visibleCategories[lastCacheCategories[point.id]];
+      });
+      populateMultiPoints(currentMultiPointsGroup, visiblePoints, lastCacheCategories, lastCacheInfo);
+      populateMultiLines(currentMultiLineGroup, visiblePoints);
+    }
+
+    function toFeature(cache) {
+      return {
+        type: 'Feature',
+        properties: cache,
+        geometry: {
+          type: 'Point',
+          coordinates: [parseFloat(cache.lon), parseFloat(cache.lat)]
+        }
+      };
+    }
+
+    function loadData() {
+      var name1 = document.getElementById('user1').value.trim();
+      var name2 = document.getElementById('user2').value.trim();
+
+      if (!name1 || !name2) {
+        setStatus('Add meg mindkét felhasználónevet.');
+        return;
+      }
+
+      var newQuery = new URLSearchParams();
+      newQuery.set('user1', name1);
+      newQuery.set('user2', name2);
+      history.replaceState(null, '', '?' + newQuery.toString());
+
+      okButton.disabled = true;
+      setStatus('Adatok lekérdezése...', true);
+
+      Promise.all([
+        lookupUserId(name1),
+        lookupUserId(name2),
+        fetchAllCaches(),
+        fetchAllPoints(),
+      ]).then(function(results) {
+        var userid1 = results[0];
+        var userid2 = results[1];
+        var caches = results[2];
+        var allPoints = results[3];
+
+        return Promise.all([
+          fetchFoundWaypoints(userid1),
+          fetchFoundWaypoints(userid2),
+        ]).then(function(foundResults) {
+          var found1 = foundResults[0];
+          var found2 = foundResults[1];
+
+          var groups = { both: [], user1: [], user2: [], nobody: [] };
+          var cacheCategories = {};
+          var cacheInfo = {};
+          var multiCacheIds = {};
+          caches.forEach(function(cache) {
+            var f1 = found1.has(cache.waypoint);
+            var f2 = found2.has(cache.waypoint);
+            var feature = toFeature(cache);
+            var category = f1 && f2 ? 'both' : f1 ? 'user1' : f2 ? 'user2' : 'nobody';
+            groups[category].push(feature);
+            cacheCategories[cache.id] = category;
+            cacheInfo[cache.id] = { waypoint: cache.waypoint, nickname: cache.nickname };
+            if (cache.type === MULTI_CACHE_TYPE) {
+              multiCacheIds[cache.id] = true;
+            }
+          });
+
+          // Exclude "W" points - those are helper POIs (e.g. parking), not actual cache stages.
+          var multiPoints = allPoints.filter(function(point) {
+            return multiCacheIds[point.id] && point.type !== 'W';
+          });
+
+          Object.keys(categoryLayers).forEach(function(key) {
+            if (categoryLayers[key]) {
+              map.removeLayer(categoryLayers[key]);
+            }
+          });
+          if (currentMultiPointsGroup) {
+            map.removeLayer(currentMultiPointsGroup);
+          }
+          if (currentMultiLineGroup) {
+            map.removeLayer(currentMultiLineGroup);
+          }
+
+          document.getElementById('legend-name-user1').textContent = name1;
+          document.getElementById('legend-name-user2').textContent = name2;
+          document.getElementById('legend-name-both').textContent = name1 + ' + ' + name2;
+
+          categoryLayers.user1 = buildLayer(name1, groups.user1, CATEGORY_COLORS.user1, 'user1');
+          categoryLayers.user2 = buildLayer(name2, groups.user2, CATEGORY_COLORS.user2, 'user2');
+          categoryLayers.both = buildLayer(name1 + ' + ' + name2, groups.both, CATEGORY_COLORS.both, 'both');
+          categoryLayers.nobody = buildLayer('Senki', groups.nobody, CATEGORY_COLORS.nobody, 'nobody');
+
+          lastMultiPoints = multiPoints;
+          lastCacheCategories = cacheCategories;
+          lastCacheInfo = cacheInfo;
+          var visiblePoints = multiPoints.filter(function(point) {
+            return visibleCategories[cacheCategories[point.id]];
+          });
+
+          currentMultiPointsGroup = L.layerGroup();
+          populateMultiPoints(currentMultiPointsGroup, visiblePoints, cacheCategories, cacheInfo);
+          if (document.getElementById('cb-multi-points').checked) {
+            currentMultiPointsGroup.addTo(map);
+          }
+
+          currentMultiLineGroup = L.layerGroup();
+          populateMultiLines(currentMultiLineGroup, visiblePoints);
+          if (document.getElementById('cb-multi-lines').checked) {
+            currentMultiLineGroup.addTo(map);
+          }
+
+          setStatus('');
+        });
+      }).catch(function(err) {
+        console.error(err);
+        setStatus(err.message || 'Ismeretlen hiba történt.');
+      }).finally(function() {
+        okButton.disabled = false;
+      });
+    }
+
+    okButton.addEventListener('click', loadData);
+    [document.getElementById('user1'), document.getElementById('user2')].forEach(function(input) {
+      input.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') {
+          loadData();
+        }
+      });
+    });
+
+    // Prefill (and auto-run) from ?user1=...&user2=... query params, if present.
+    var queryParams = new URLSearchParams(window.location.search);
+    var queryUser1 = queryParams.get('user1');
+    var queryUser2 = queryParams.get('user2');
+    if (queryUser1) {
+      document.getElementById('user1').value = queryUser1;
+    }
+    if (queryUser2) {
+      document.getElementById('user2').value = queryUser2;
+    }
+    if (queryUser1 && queryUser2) {
+      loadData();
+    }
+  </script>
+</body>
+</html>
