@@ -151,7 +151,8 @@
     var API_BASE = 'https://api.geocaching.hu';
     // Short cache-type codes, per the geocaching.hu API's hstat schema.
     var CACHE_TYPE_CODES = { '1': 'H', '2': 'M', '3': 'V', '4': 'E', '6': 'X' };
-    var MULTI_CACHE_TYPE = '2';
+    // Multi (2) and Esemény/Event (4) caches can both have several stage points.
+    var MULTI_STAGE_CACHE_TYPES = { '2': true, '4': true };
     var CATEGORY_COLORS = { user1: 'red', user2: 'blue', both: 'gray', nobody: 'green' };
 
     var map = L.map('map').setView([47.5, 19], 8);
@@ -520,7 +521,7 @@
             groups[category].push(feature);
             cacheCategories[cache.id] = category;
             cacheInfo[cache.id] = { waypoint: cache.waypoint, nickname: cache.nickname };
-            if (cache.type === MULTI_CACHE_TYPE) {
+            if (MULTI_STAGE_CACHE_TYPES[cache.type]) {
               multiCacheIds[cache.id] = true;
             }
           });
