@@ -8,7 +8,7 @@ A single-page map that compares two [geocaching.hu](https://geocaching.hu) users
 
 Enter two geocaching.hu usernames and the map shows every active cache in Hungary, color-coded by who's found it:
 
-- 🔴 only user 1
+- 🟠 only user 1
 - 🔵 only user 2
 - 🟢 neither
 - ⚪ both (hidden by default)

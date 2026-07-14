@@ -77,6 +77,10 @@
     .legend-group + .legend-group {
       margin-top: 10px;
     }
+    /* Hidden until the first successful query has actual find data to show. */
+    #findMatrixGroup {
+      display: none;
+    }
     .legend-title {
       font-weight: bold;
       padding: 0 0 6px 0;
@@ -153,7 +157,9 @@
     var CACHE_TYPE_CODES = { '1': 'H', '2': 'M', '3': 'V', '4': 'E', '6': 'X' };
     // Multi (2) and Esemény/Event (4) caches can both have several stage points.
     var MULTI_STAGE_CACHE_TYPES = { '2': true, '4': true };
-    var CATEGORY_COLORS = { user1: 'red', user2: 'blue', both: 'gray', nobody: 'green' };
+    // Colorblind-friendly palette (Okabe-Ito): orange and bluish-green instead of
+    // red/green, which are hard to tell apart under red-green color vision deficiency.
+    var CATEGORY_COLORS = { user1: '#e69f00', user2: 'blue', both: 'lightgray', nobody: '#009e73' };
 
     var map = L.map('map').setView([47.5, 19], 8);
 
@@ -178,17 +184,17 @@
       var div = L.DomUtil.create('div', 'leaflet-control');
       div.id = 'legend';
       div.innerHTML =
-        '<div class="legend-group">' +
+        '<div class="legend-group" id="findMatrixGroup">' +
         '<div class="legend-title">Ki találta meg?</div>' +
-        '<label><input type="checkbox" id="cb-user1" checked><span class="legend-swatch" style="background:red"></span><span id="legend-name-user1"></span></label>' +
+        '<label><input type="checkbox" id="cb-user1" checked><span class="legend-swatch" style="background:#e69f00"></span><span id="legend-name-user1"></span></label>' +
         '<label><input type="checkbox" id="cb-user2" checked><span class="legend-swatch" style="background:blue"></span><span id="legend-name-user2"></span></label>' +
-        '<label><input type="checkbox" id="cb-both"><span class="legend-swatch" style="background:gray"></span><span id="legend-name-both"></span></label>' +
-        '<label><input type="checkbox" id="cb-nobody" checked><span class="legend-swatch" style="background:green"></span>Senki</label>' +
+        '<label><input type="checkbox" id="cb-both"><span class="legend-swatch" style="background:lightgray"></span><span id="legend-name-both"></span></label>' +
+        '<label><input type="checkbox" id="cb-nobody" checked><span class="legend-swatch" style="background:#009e73"></span><span id="legend-name-nobody"></span></label>' +
         '</div>' +
         '<div class="legend-group">' +
         '<div class="legend-title">Multiláda extrák</div>' +
         '<label><input type="checkbox" id="cb-multi-points" checked>Multipontok mutatása</label>' +
-        '<label><input type="checkbox" id="cb-multi-lines">Multipontok összekötése</label>' +
+        '<label><input type="checkbox" id="cb-multi-lines" checked>Multipontok összekötése</label>' +
         '</div>' +
         '<div class="legend-group">' +
         '<div class="legend-title">Overlay rétegek</div>' +
@@ -250,11 +256,12 @@
     // about zoom 13. Requesting an oversized image for the same tile bbox raises the
     // effective resolution enough to cross that threshold server-side; the browser then
     // just scales the (larger) response back down to the normal tile size. Verified
-    // empirically: 512px isn't enough at zoom 11/12, 1024px reliably is.
+    // empirically: 512px isn't enough at zoom 11/12, 1024px reliably is. Below zoom 11 we
+    // don't bother - the layer just stays blank there rather than oversampling further.
     var ForestProtectionWMS = L.TileLayer.WMS.extend({
       getTileUrl: function(coords) {
         var url = L.TileLayer.WMS.prototype.getTileUrl.call(this, coords);
-        if (coords.z < 13) {
+        if (coords.z >= 11 && coords.z < 13) {
           url = url.replace(/([?&])(width|height)=\d+/gi, '$1$2=1024');
         }
         return url;
@@ -275,13 +282,16 @@
         opacity: 0.7,
         attribution: 'Védettség &copy; <a href="https://web.okir.hu/hu/tart/index/234/Interaktiv_termeszetvedelmi_terkep" target="_blank">OKIR</a>'
       }),
+      // No minZoom here on purpose: Leaflet raises the *whole map's* minimum zoom to match
+      // whenever this is the only active layer declaring one (Map._layersMinZoom is the min
+      // across active layers) - that would block zooming out entirely. Simply not rendering
+      // below zoom 11 (via getTileUrl above) is enough; it's fine for it to be blank there.
       forestProtection: new ForestProtectionWMS('https://erdoterkep.nebih.gov.hu/geoserver/nebih/wms?', {
         layers: 'KUL_RESZLET_VW',
         styles: 'vedettseg',
         transparent: true,
         format: 'image/png',
         opacity: 0.7,
-        minZoom: 11,
         attribution: 'Erdők védettsége &copy; <a href="https://erdoterkep.nebih.gov.hu/" target="_blank">NÉBIH</a>'
       })
     };
@@ -290,6 +300,13 @@
     bindToggle('cb-mtb', function() { return overlayLayers.mtb; });
     bindToggle('cb-protected-areas', function() { return overlayLayers.protectedAreas; });
     bindToggle('cb-forest-protection', function() { return overlayLayers.forestProtection; });
+    // The layer itself won't render below zoom 11 - jump there on enable so it's
+    // actually visible right away instead of silently doing nothing.
+    document.getElementById('cb-forest-protection').addEventListener('change', function(e) {
+      if (e.target.checked && map.getZoom() < 11) {
+        map.setZoom(11);
+      }
+    });
 
     var statusEl = document.getElementById('status');
     var okButton = document.getElementById('okButton');
@@ -547,9 +564,11 @@
             map.removeLayer(currentMultiLineGroup);
           }
 
-          document.getElementById('legend-name-user1').textContent = name1;
-          document.getElementById('legend-name-user2').textContent = name2;
-          document.getElementById('legend-name-both').textContent = name1 + ' + ' + name2;
+          document.getElementById('findMatrixGroup').style.display = 'block';
+          document.getElementById('legend-name-user1').textContent = name1 + ' (' + groups.user1.length + ')';
+          document.getElementById('legend-name-user2').textContent = name2 + ' (' + groups.user2.length + ')';
+          document.getElementById('legend-name-both').textContent = name1 + ' + ' + name2 + ' (' + groups.both.length + ')';
+          document.getElementById('legend-name-nobody').textContent = 'Senki (' + groups.nobody.length + ')';
 
           categoryLayers.user1 = buildLayer(name1, groups.user1, CATEGORY_COLORS.user1, 'user1');
           categoryLayers.user2 = buildLayer(name2, groups.user2, CATEGORY_COLORS.user2, 'user2');
